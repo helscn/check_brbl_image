@@ -1,6 +1,48 @@
 from PySide6.QtGui import QImage, QPainter
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt,QThread, Signal, Slot, QObject
 import os
+import time
+
+class MonitorDir(QObject):
+    # 定义线程间通信信号
+    dir_updated = Signal(list)
+    thumbnail_updated = Signal(str,str)
+    dir_deleted = Signal(str)
+    image_deleted = Signal(str)
+    
+    def __init__(self, monitor_path, thumbnail_path):
+        super().__init__()
+        self.monitor_path = monitor_path
+        self.thumbnail_path = thumbnail_path
+        self.dirs = []
+        self.images = {}
+        self._stop = False
+        
+    @Slot()
+    def start_monitor(self):
+        """线程主函数"""
+        while not self._stop:
+            # 扫描目录逻辑
+            print(f"正在扫描目录 {self.monitor_path}...")
+            current_dirs = []
+            for entry in os.scandir(self.monitor_path):
+                if entry.is_dir():
+                    current_dirs.append(entry.name)
+            current_dirs.sort()
+            if current_dirs != self.dirs:
+                print("目录已更新", current_dirs)
+                self.dirs = current_dirs
+                self.dir_updated.emit(current_dirs)
+            time.sleep(1)  # 每1秒扫描一次目录
+
+    
+    @Slot()
+    def stop(self):
+        """停止线程"""
+        print("正在停止线程...")
+        self._stop = True
+
+
 
 def merge_brbl_tif(image_paths, crop_left_right=60, crop_top_bottom=540, scale_percent=0.05):
     """
