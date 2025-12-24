@@ -2,8 +2,7 @@
 # -*- coding: utf-8 -*-
 
 from PySide6.QtWidgets import QApplication, QMainWindow, QMessageBox, QFileDialog, QHeaderView, QStyleFactory
-from PySide6.QtCore import Qt, QAbstractTableModel, QModelIndex
-from PySide6.QtCore import QThread, Signal, Slot, QObject
+from PySide6.QtCore import Qt, QAbstractTableModel, QModelIndex, QThread, Signal, Slot
 from PySide6.QtGui import QPixmap
 from ui.MainWindow_ui import Ui_MainWindow
 import resources_rc
@@ -84,8 +83,8 @@ class MainWindow(QMainWindow):
 
     def init_table(self):
         self.TableHeaders=['二维码',' 板厚图片 ',' 确认结果 ']
-        tableModel=ImagesTableModel([],self.TableHeaders)
-        self.ui.tblImages.setModel(tableModel)
+        self.tableModel=ImagesTableModel([],self.TableHeaders)
+        self.ui.tblImages.setModel(self.tableModel)
         header = self.ui.tblImages.horizontalHeader()
         header.setSectionResizeMode(0,QHeaderView.ResizeMode.Stretch)
         header.setSectionResizeMode(1,QHeaderView.ResizeMode.ResizeToContents)
@@ -107,7 +106,8 @@ class MainWindow(QMainWindow):
         self.ui.btnMarkOK.clicked.connect(self.mark_ok)
         self.ui.btnMarkSection.clicked.connect(self.mark_section)
         self.ui.btnMarkDelete.clicked.connect(self.mark_delete)
-        self.ui.tblImages.clicked.connect(self.select_table_row)
+        self.ui.tblImages.clicked.connect(self.show_current_row)
+        
 
     def closeEvent(self, event):
         self.worker.stop()
@@ -120,22 +120,45 @@ class MainWindow(QMainWindow):
         pass
 
     def mark_ok(self):
-        pass
+        idx = self.currentIndex
+        if idx>=0 and idx<len(self.data):
+            dir,name = self.data[idx]
+            self.images[(dir,name)]["checked"] = self.status['ok']
+            self.update_table()
+            self.select_next_unchecked_image()
 
     def mark_section(self):
-        pass
+        idx = self.currentIndex
+        if idx>=0 and idx<len(self.data):
+            dir,name = self.data[idx]
+            self.images[(dir,name)]["checked"] = self.status['section']
+            self.update_table()
+            self.select_next_unchecked_image()
 
     def mark_delete(self):
-        pass
+        idx = self.currentIndex
+        if idx>=0 and idx<len(self.data):
+            dir,name = self.data[idx]
+            self.images[(dir,name)]["checked"] = self.status['delete']
+            self.update_table()
+            self.select_next_unchecked_image()
 
     
     def update_table(self):
         folder_regex = re.compile(r"^([A-Z0-9\-]+)_(\d+)_(\d{14})_(\d*)_.*$",re.IGNORECASE)
-        current_dir = self.ui.cmbSelectPN.currentText()
+        current_index = self.currentIndex
+        if current_index>0 and current_index<len(self.data):
+            current_dir, current_name=self.data[current_index]
+        else:
+            current_dir = self.ui.cmbSelectPN.currentText()
+            current_name = ""
+
         self.data = [(dir,name) for dir,name in self.images.keys() if dir == current_dir]
         self.data.sort(key=lambda x: x[1])
         tableData=[]
-        for dir,name in self.data:
+        update = True
+        for i,info in enumerate(self.data):
+            dir,name = info
             match = folder_regex.match(name)
             if match:
                 matrix = match.group(4)
@@ -143,19 +166,70 @@ class MainWindow(QMainWindow):
                 matrix = ""
             image = self.images[(dir,name)]
             tableData.append([matrix,image["status"],image['checked']])
-            
-        tableModel=ImagesTableModel(tableData,self.TableHeaders)
-        self.ui.tblImages.setModel(tableModel)
+            if name == current_name:
+                current_index = i
+                update = False
+        
+        self.tableModel=ImagesTableModel(tableData,self.TableHeaders)
+        self.ui.tblImages.setModel(self.tableModel)
+        
+        if update:
+            self.currentIndex = current_index
+            self.select_table_row(current_index)
+        
 
-    def select_table_row(self):
+    def show_current_row(self):
         self.currentIndex = self.ui.tblImages.currentIndex().row()
+        self.ui.tblImages.selectRow(self.currentIndex)
         self.show_selected_image(self.currentIndex)
+
+    
+    def select_table_row(self,idx:int):
+        if idx<0 or idx>=len(self.data): return
+        target_index = self.tableModel.index(idx,0)
+        self.ui.tblImages.setCurrentIndex(target_index)
+        self.show_current_row()
+
+    def select_next_unchecked_image(self):
+        if self.currentIndex<0 or len(self.data)==0 or self.currentIndex>=len(self.data):
+            return
+        idx=self.currentIndex
+        idx += 1
+        while idx<=len(self.data):
+            if idx==len(self.data):
+                idx = 0
+            if idx==self.currentIndex:
+                QMessageBox.information(self, "提示", "所有图片已确认，可将数据发送至板厚分析电脑。")
+                return
+            dir,name = self.data[idx]
+            if not self.images[(dir,name)]["checked"]:
+                self.currentIndex = idx
+                self.select_table_row(idx)
+                break
+            idx += 1
 
 
     def show_selected_image(self,idx:int=-1):
         if idx>=0:
             self.currentIndex = idx
-        
+        else:
+            idx = self.currentIndex
+        if idx<0 or idx>len(self.data)-1:
+            self.ui.imgCS.setPixmap(QPixmap())
+            self.ui.imgSS.setPixmap(QPixmap())
+            self.ui.lblTitle.setText("板厚图片")
+            self.ui.lblComment.setText("")
+        else:
+            dir,name = self.data[idx]
+            self.ui.lblTitle.setText("{} {}".format(self.images[(dir,name)]['checked'],name))
+            self.ui.lblComment.setText("{} / {}".format(idx+1,len(self.data)))
+            if self.images[(dir,name)]["status"] == self.status["ok"]:
+                self.ui.imgCS.setPixmap(QPixmap(os.path.join(self.config["ThumbnailFolder"], dir, name+"_CS.png")))
+                self.ui.imgSS.setPixmap(QPixmap(os.path.join(self.config["ThumbnailFolder"], dir, name+"_SS.png")))
+            else:
+                self.ui.imgCS.setPixmap(QPixmap())
+                self.ui.imgSS.setPixmap(QPixmap())
+
 
     @Slot(list)
     def dir_updated(self, dirs: list):
@@ -185,7 +259,20 @@ class MainWindow(QMainWindow):
         elif status == "new":
             self.images[(dir,name)] = {"status": "", "checked": ""}
         if self.ui.cmbSelectPN.currentText() == dir:
+            if self.currentIndex >= 0 and self.currentIndex < len(self.data):
+                name = self.data[self.currentIndex][1]
+            else:
+                name = ""
             self.update_table()
+            self.currentIndex = -1
+            for i in range(len(self.data)):
+                if self.data[i][1] == name:
+                    self.currentIndex = i
+                    break
+            if self.currentIndex >= 0:
+                self.select_table_row(self.currentIndex)
+            else:
+                self.show_selected_image()
 
 
     @Slot(str)
