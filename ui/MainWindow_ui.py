@@ -55,27 +55,16 @@ class Ui_MainWindow(object):
 
         self.horizontalLayout.addWidget(self.cmbSelectPN)
 
-        self.btnLoadImages = QPushButton(self.centralwidget)
-        self.btnLoadImages.setObjectName(u"btnLoadImages")
-        self.btnLoadImages.setMinimumSize(QSize(0, 38))
-        self.btnLoadImages.setMaximumSize(QSize(140, 16777215))
-        font2 = QFont()
-        font2.setBold(True)
-        self.btnLoadImages.setFont(font2)
-        icon1 = QIcon()
-        icon1.addFile(u":/icon/res/refresh.png", QSize(), QIcon.Normal, QIcon.Off)
-        self.btnLoadImages.setIcon(icon1)
-
-        self.horizontalLayout.addWidget(self.btnLoadImages)
-
         self.btnMoveTodo = QPushButton(self.centralwidget)
         self.btnMoveTodo.setObjectName(u"btnMoveTodo")
         self.btnMoveTodo.setMinimumSize(QSize(0, 38))
         self.btnMoveTodo.setMaximumSize(QSize(140, 16777215))
+        font2 = QFont()
+        font2.setBold(True)
         self.btnMoveTodo.setFont(font2)
-        icon2 = QIcon()
-        icon2.addFile(u":/icon/res/todo.png", QSize(), QIcon.Normal, QIcon.Off)
-        self.btnMoveTodo.setIcon(icon2)
+        icon1 = QIcon()
+        icon1.addFile(u":/icon/res/todo.png", QSize(), QIcon.Normal, QIcon.Off)
+        self.btnMoveTodo.setIcon(icon1)
 
         self.horizontalLayout.addWidget(self.btnMoveTodo)
 
@@ -105,33 +94,6 @@ class Ui_MainWindow(object):
 
         self.verticalLayout_3 = QVBoxLayout()
         self.verticalLayout_3.setObjectName(u"verticalLayout_3")
-        self.horizontalLayout_5 = QHBoxLayout()
-        self.horizontalLayout_5.setObjectName(u"horizontalLayout_5")
-        self.btnPrevious = QPushButton(self.centralwidget)
-        self.btnPrevious.setObjectName(u"btnPrevious")
-        self.btnPrevious.setMinimumSize(QSize(100, 40))
-        self.btnPrevious.setMaximumSize(QSize(150, 16777215))
-
-        self.horizontalLayout_5.addWidget(self.btnPrevious)
-
-        self.lblIndex = QLabel(self.centralwidget)
-        self.lblIndex.setObjectName(u"lblIndex")
-        self.lblIndex.setMinimumSize(QSize(80, 0))
-        self.lblIndex.setMaximumSize(QSize(80, 16777215))
-        self.lblIndex.setAlignment(Qt.AlignCenter)
-
-        self.horizontalLayout_5.addWidget(self.lblIndex)
-
-        self.btnNext = QPushButton(self.centralwidget)
-        self.btnNext.setObjectName(u"btnNext")
-        self.btnNext.setMinimumSize(QSize(100, 40))
-        self.btnNext.setMaximumSize(QSize(150, 16777215))
-
-        self.horizontalLayout_5.addWidget(self.btnNext)
-
-
-        self.verticalLayout_3.addLayout(self.horizontalLayout_5)
-
         self.line_2 = QFrame(self.centralwidget)
         self.line_2.setObjectName(u"line_2")
         self.line_2.setFrameShape(QFrame.HLine)
@@ -141,13 +103,19 @@ class Ui_MainWindow(object):
 
         self.lblTitle = QLabel(self.centralwidget)
         self.lblTitle.setObjectName(u"lblTitle")
-        self.lblTitle.setMinimumSize(QSize(0, 35))
-        self.lblTitle.setMaximumSize(QSize(16777215, 35))
+        self.lblTitle.setMinimumSize(QSize(0, 30))
+        self.lblTitle.setMaximumSize(QSize(16777215, 30))
         self.lblTitle.setFont(font)
         self.lblTitle.setFrameShape(QFrame.NoFrame)
         self.lblTitle.setAlignment(Qt.AlignBottom|Qt.AlignHCenter)
 
         self.verticalLayout_3.addWidget(self.lblTitle)
+
+        self.lblComment = QLabel(self.centralwidget)
+        self.lblComment.setObjectName(u"lblComment")
+        self.lblComment.setAlignment(Qt.AlignCenter)
+
+        self.verticalLayout_3.addWidget(self.lblComment)
 
         self.gridLayout = QGridLayout()
         self.gridLayout.setObjectName(u"gridLayout")
@@ -245,12 +213,9 @@ class Ui_MainWindow(object):
     def retranslateUi(self, MainWindow):
         MainWindow.setWindowTitle(QCoreApplication.translate("MainWindow", u"MainWindow", None))
         self.label.setText(QCoreApplication.translate("MainWindow", u"\u6d4b\u91cf\u578b\u53f7\uff1a", None))
-        self.btnLoadImages.setText(QCoreApplication.translate("MainWindow", u"\u5237\u65b0\u6d4b\u91cf\u56fe\u7247", None))
         self.btnMoveTodo.setText(QCoreApplication.translate("MainWindow", u"\u53d1\u9001\u5230\u677f\u539a\u5206\u6790", None))
-        self.btnPrevious.setText(QCoreApplication.translate("MainWindow", u"\u2b05\ufe0f \u4e0a\u4e00\u5757", None))
-        self.lblIndex.setText(QCoreApplication.translate("MainWindow", u"1 / 1", None))
-        self.btnNext.setText(QCoreApplication.translate("MainWindow", u"\u4e0b\u4e00\u5757 \u27a1\ufe0f", None))
         self.lblTitle.setText(QCoreApplication.translate("MainWindow", u"\u677f\u539a\u56fe\u7247", None))
+        self.lblComment.setText("")
         self.imgCS.setText("")
         self.imgSS.setText("")
         self.label_5.setText(QCoreApplication.translate("MainWindow", u"\u6b63\u9762", None))
