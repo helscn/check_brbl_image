@@ -4,10 +4,13 @@
 from PySide6.QtWidgets import QApplication, QMainWindow, QMessageBox, QFileDialog, QHeaderView, QStyleFactory
 from PySide6.QtCore import Qt, QAbstractTableModel, QModelIndex, QThread, Signal, Slot
 from PySide6.QtGui import QPixmap
+
 from ui.MainWindow_ui import Ui_MainWindow
 import resources_rc
 
 from library import MonitorDir
+from threading import Lock
+import shutil
 import json
 import os
 import re
@@ -51,9 +54,10 @@ class MainWindow(QMainWindow):
         self.ui = Ui_MainWindow()
         self.ui.setupUi(self)
         self.load_config()
-        self.dirs = []
-        self.images = {}
-        self.data = []
+        self.lock = Lock()
+        self.dirs = []      # 监控目录中的所有型号文件夹清单
+        self.images = {}    # 保存的图片信息数据，{(dir,name)} = {"status": status, "checked": checked}
+        self.data = []      # 当前型号的图片清单 [(dir,name)]
         self.currentIndex = -1
         self.status = {
             "ok": "✅",
@@ -70,8 +74,10 @@ class MainWindow(QMainWindow):
 
     def load_config(self):
         config={
-            "ImagesFolder":"E:/Images/",
-            "ThumbnailFolder":"E:/Thumbnails/"
+            "ImagesFolder":"E:/PCBImages",
+            "ThumbnailFolder":"E:/PCBThumbnails",
+            "SectionFolder":"E:/PCBSections",
+            "ProcessFolder":"E:/PCBThickness"
         }
         if os.path.isfile("config.json"):
             try:
@@ -101,12 +107,12 @@ class MainWindow(QMainWindow):
         self.thread.start()
         
     def init_signal(self):
-        self.ui.cmbSelectPN.currentIndexChanged.connect(self.update_table)
+        self.ui.cmbSelectPN.currentIndexChanged.connect(self.selected_pn_changed)
         self.ui.btnMoveTodo.clicked.connect(self.move_todo)
         self.ui.btnMarkOK.clicked.connect(self.mark_ok)
         self.ui.btnMarkSection.clicked.connect(self.mark_section)
         self.ui.btnMarkDelete.clicked.connect(self.mark_delete)
-        self.ui.tblImages.clicked.connect(self.show_current_row)
+        self.ui.tblImages.clicked.connect(self.click_table_row)
         
 
     def closeEvent(self, event):
@@ -116,8 +122,49 @@ class MainWindow(QMainWindow):
             self.thread.terminate()  # 最后手段
             self.thread.wait()
         event.accept()
+
+
     def move_todo(self):
-        pass
+        self.lock.acquire()
+        for dir,name in self.data:
+            checked=self.images[(dir,name)]["checked"]
+            if checked==self.status['error'] or checked=="":
+                self.lock.release()
+                QMessageBox.warning(self, "错误", "有未确认的板厚图片，请先标记所有待处理的板厚图片！")
+                return
+        
+        for dir,name in self.data:
+            checked=self.images[(dir,name)]["checked"]
+            if checked==self.status['delete']:
+                try:
+                    shutil.rmtree(os.path.join(self.config["ImagesFolder"], dir, name))
+                except Exception as e:
+                    self.lock.release()
+                    QMessageBox.critical(self, "错误", f"无法删除指定的文件夹:\n{e}")
+                    return
+            elif checked==self.status['section']:
+                try:
+                    if not os.path.isdir(os.path.join(self.config["SectionFolder"], dir)):
+                        os.mkdir(os.path.join(self.config["SectionFolder"], dir))
+                        with open(os.path.join(self.config["SectionFolder"], dir, name+".txt"), "w") as f:
+                            f.write("")
+                except Exception as e:
+                    self.lock.release()
+                    QMessageBox.critical(self, "错误", f"无法输出切片板信息至指定路径:\n{e}")
+                    return
+                
+        try:
+            dir = self.ui.cmbSelectPN.currentText()
+            shutil.move(os.path.join(self.config["ImagesFolder"], dir), os.path.join(self.config["ProcessFolder"], dir))
+        except Exception as e:
+            self.lock.release()
+            QMessageBox.critical(self, "错误", f"无法移动当前型号数据至待处理文件夹:\n{e}")
+            return
+        self.lock.release()
+        QMessageBox.information(self, "成功", f"已将 {dir} 数据移发送至板厚分析待处理！")
+    
+
+
 
     def mark_ok(self):
         idx = self.currentIndex
@@ -143,87 +190,110 @@ class MainWindow(QMainWindow):
             self.update_table()
             self.select_next_unchecked_image()
 
-    
-    def update_table(self):
-        folder_regex = re.compile(r"^([A-Z0-9\-]+)_(\d+)_(\d{14})_(\d*)_.*$",re.IGNORECASE)
-        current_index = self.currentIndex
-        if current_index>0 and current_index<len(self.data):
-            current_dir, current_name=self.data[current_index]
-        else:
-            current_dir = self.ui.cmbSelectPN.currentText()
-            current_name = ""
+    @Slot()
+    def selected_pn_changed(self):
+        self.currentIndex = -1
+        self.update_table()
+        self.clear_current_image()
 
-        self.data = [(dir,name) for dir,name in self.images.keys() if dir == current_dir]
-        self.data.sort(key=lambda x: x[1])
-        tableData=[]
-        update = True
-        for i,info in enumerate(self.data):
-            dir,name = info
-            match = folder_regex.match(name)
-            if match:
-                matrix = match.group(4)
-            else:
-                matrix = ""
-            image = self.images[(dir,name)]
-            tableData.append([matrix,image["status"],image['checked']])
-            if name == current_name:
-                current_index = i
-                update = False
+    def update_table(self):
+        # 根据当前选择的型号更新表格数据
+        folder_regex = re.compile(r"^([A-Z0-9\-]+)_(\d+)_(\d{14})_(\d*)_.*$",re.IGNORECASE)
+        select_dir = self.ui.cmbSelectPN.currentText()
+        with self.lock:
+            self.data = [(dir,name) for dir,name in self.images.keys() if dir == select_dir]
+            self.data.sort(key=lambda x: x[1])
+            tableData=[]
+            for i,info in enumerate(self.data):
+                dir,name = info
+                match = folder_regex.match(name)
+                if match:
+                    matrix = match.group(4)
+                else:
+                    matrix = ""
+                image = self.images[(dir,name)]
+                tableData.append([matrix,image["status"],image['checked']])
         
         self.tableModel=ImagesTableModel(tableData,self.TableHeaders)
         self.ui.tblImages.setModel(self.tableModel)
-        
-        if update:
-            self.currentIndex = current_index
-            self.select_table_row(current_index)
-        
 
-    def show_current_row(self):
+    @Slot()
+    def click_table_row(self):
         self.currentIndex = self.ui.tblImages.currentIndex().row()
-        self.ui.tblImages.selectRow(self.currentIndex)
-        self.show_selected_image(self.currentIndex)
+        dir,name = self.get_current_image()
+        self.select_table_row(dir,name)
 
-    
-    def select_table_row(self,idx:int):
-        if idx<0 or idx>=len(self.data): return
-        target_index = self.tableModel.index(idx,0)
-        self.ui.tblImages.setCurrentIndex(target_index)
-        self.show_current_row()
+    def get_current_image(self):
+        # 获取当前选中的图片信息
+        with self.lock:
+            idx = self.currentIndex
+            if idx>=0 and idx<len(self.data):
+                dir,name = self.data[idx]
+            else:
+                dir=""
+                name=""
+        return dir,name
+
+    def select_table_row(self,dir,name):
+        if not dir: return
+        with self.lock:
+            if (dir,name) in self.data:
+                idx = self.data.index((dir,name))
+                target_index = self.tableModel.index(idx,0)
+                self.ui.tblImages.setCurrentIndex(target_index)
+                self.ui.tblImages.selectRow(idx)
+            else:
+                idx = -1
+                self.ui.tblImages.clearFocusr()
+                self.ui.tblImages.clearSelection()
+            self.currentIndex = idx
+        self.show_selected_image()
 
     def select_next_unchecked_image(self):
-        if self.currentIndex<0 or len(self.data)==0 or self.currentIndex>=len(self.data):
+        dir,name = self.get_current_image()
+        with self.lock:
+            idx=self.currentIndex
+            length = len(self.data)
+            unchecked = False
+            if idx<0 or length==0 or idx>=length:
+                unchecked = True
+            else:
+                for i,info in enumerate(self.data):
+                    dir,name = info
+                    if not self.images[(dir,name)]["checked"]:
+                        self.currentIndex = idx
+                        unchecked = True
+                        break
+        if unchecked:
+            self.select_table_row(dir,name)
+        else:
+            QMessageBox.information(self, "提示", "所有图片已确认，可将数据发送至板厚分析电脑。")
+            self.clear_current_image()
+
+    def clear_current_image(self):
+        self.ui.lblTitle.setText("板厚图片")
+        self.ui.lblComment.setText("")
+        self.ui.imgCS.setPixmap(QPixmap())
+        self.ui.imgSS.setPixmap(QPixmap())
+
+    def show_selected_image(self):
+        self.lock.acquire()
+        idx = self.currentIndex
+        length = len(self.data)
+
+        if idx<0 or idx>length-1:
+            self.clear_current_image()
+            self.lock.release()
             return
-        idx=self.currentIndex
-        idx += 1
-        while idx<=len(self.data):
-            if idx==len(self.data):
-                idx = 0
-            if idx==self.currentIndex:
-                QMessageBox.information(self, "提示", "所有图片已确认，可将数据发送至板厚分析电脑。")
-                return
-            dir,name = self.data[idx]
-            if not self.images[(dir,name)]["checked"]:
-                self.currentIndex = idx
-                self.select_table_row(idx)
-                break
-            idx += 1
-
-
-    def show_selected_image(self,idx:int=-1):
-        if idx>=0:
-            self.currentIndex = idx
-        else:
-            idx = self.currentIndex
-        if idx<0 or idx>len(self.data)-1:
-            self.ui.imgCS.setPixmap(QPixmap())
-            self.ui.imgSS.setPixmap(QPixmap())
-            self.ui.lblTitle.setText("板厚图片")
-            self.ui.lblComment.setText("")
         else:
             dir,name = self.data[idx]
-            self.ui.lblTitle.setText("{} {}".format(self.images[(dir,name)]['checked'],name))
-            self.ui.lblComment.setText("{} / {}".format(idx+1,len(self.data)))
-            if self.images[(dir,name)]["status"] == self.status["ok"]:
+            info=self.images[(dir,name)]
+            status = info["status"]
+            checked = info["checked"]
+            self.lock.release()
+            self.ui.lblTitle.setText("{} {}".format(checked,name))
+            self.ui.lblComment.setText("{} / {}".format(idx+1,length))
+            if status == self.status["ok"]:
                 self.ui.imgCS.setPixmap(QPixmap(os.path.join(self.config["ThumbnailFolder"], dir, name+"_CS.png")))
                 self.ui.imgSS.setPixmap(QPixmap(os.path.join(self.config["ThumbnailFolder"], dir, name+"_SS.png")))
             else:
@@ -233,46 +303,51 @@ class MainWindow(QMainWindow):
 
     @Slot(list)
     def dir_updated(self, dirs: list):
-        current_dir = self.ui.cmbSelectPN.currentText()
-        self.ui.cmbSelectPN.clear()
-        for dir in dirs:
-            self.ui.cmbSelectPN.addItem(dir)
-            if current_dir == dir:
-                self.ui.cmbSelectPN.setCurrentText(dir)
+        self.ui.cmbSelectPN.currentIndexChanged.disconnect(self.selected_pn_changed)
+        with self.lock:
+            current_dir = self.ui.cmbSelectPN.currentText()
+            self.ui.cmbSelectPN.clear()
+            dir_changed=True
+            for dir in dirs:
+                self.ui.cmbSelectPN.addItem(dir)
+                if current_dir == dir:
+                    dir_changed=False
+                    self.ui.cmbSelectPN.setCurrentText(dir)
+
+        self.ui.cmbSelectPN.currentIndexChanged.connect(self.selected_pn_changed)
+        if dir_changed:
+            self.selected_pn_changed()
+
 
 
     @Slot(str, str)
     def thumbnail_updated(self, dir:str, name:str, status:str):
-        if status == "ok":
-            if (dir,name) in self.images:
-                self.images[(dir,name)]["status"] = self.status[status]
-            else:
-                self.images[(dir,name)] = {"status": self.status[status], "checked": ""}
-        elif status == "error":
-            if (dir,name) in self.images:
-                self.images[(dir,name)]["status"] = self.status[status]
-            else:
-                self.images[(dir,name)] = {"status": self.status[status], "checked": ""}
-        elif status == "delete":
-            if (dir,name) in self.images:
-                del self.images[(dir,name)]
-        elif status == "new":
-            self.images[(dir,name)] = {"status": "", "checked": ""}
+        # 更新收集的图片信息
+        with self.lock:
+            if status == "ok":
+                if (dir,name) in self.images:
+                    self.images[(dir,name)]["status"] = self.status[status]
+                else:
+                    self.images[(dir,name)] = {"status": self.status[status], "checked": ""}
+            elif status == "error":
+                if (dir,name) in self.images:
+                    self.images[(dir,name)]["status"] = self.status[status]
+                else:
+                    self.images[(dir,name)] = {"status": self.status[status], "checked": ""}
+            elif status == "delete":
+                if (dir,name) in self.images:
+                    del self.images[(dir,name)]
+            elif status == "new":
+                self.images[(dir,name)] = {"status": "", "checked": ""}
+
+        # 如果更新的数据为当前选择的型号，则更新表格
         if self.ui.cmbSelectPN.currentText() == dir:
-            if self.currentIndex >= 0 and self.currentIndex < len(self.data):
-                name = self.data[self.currentIndex][1]
-            else:
-                name = ""
             self.update_table()
-            self.currentIndex = -1
-            for i in range(len(self.data)):
-                if self.data[i][1] == name:
-                    self.currentIndex = i
-                    break
-            if self.currentIndex >= 0:
-                self.select_table_row(self.currentIndex)
-            else:
-                self.show_selected_image()
+
+        current_dir,current_name = self.get_current_image()
+        if current_dir == dir:
+            self.show_selected_image()
+            self.select_table_row(current_dir,current_name)
 
 
     @Slot(str)
