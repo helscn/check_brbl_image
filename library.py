@@ -1,6 +1,5 @@
 from PySide6.QtGui import QImage, QPainter
 from PySide6.QtCore import Qt, Signal, Slot, QObject
-from threading import Lock
 import os
 import time
 import re
@@ -18,42 +17,56 @@ class MonitorDir(QObject):
         self.dirs = []
         self.images = {}
         self.interval = interval
-        self.lock = Lock()
         self._stop = False
         
     @Slot()
     def start_monitor(self):
         """线程主函数"""
-        folder_regex = re.compile(r"^([A-Z0-9\-]+)_(\d+)_(\d{14})_(\d*)_.*$",re.IGNORECASE)
+
+        # 搜索已存在的子文件夹
         self.dirs = []
-        for entry in os.scandir(self.monitor_path):
-            if entry.is_dir():
-                self.dirs.append(entry.name)
-        self.dirs.sort()
-        self.dir_updated.emit(self.dirs)
-
-        for dir in self.dirs:
-            for entry in os.scandir(os.path.join(self.monitor_path, dir)):
+        try:
+            for entry in os.scandir(self.monitor_path):
                 if entry.is_dir():
-                    name = entry.name
-                    match = folder_regex.match(name)
-                    if match:
-                        self.thumbnail_updated.emit(dir, name, "new")
+                    self.dirs.append(entry.name)
+            self.dirs.sort()
+            self.dir_updated.emit(self.dirs)
+        except:
+            pass
 
+
+        # 搜索子文件夹中的测量图片
+        folder_regex = re.compile(r"^([A-Z0-9\-]+)_(\d+)_(\d{14})_(\d*)_.*$",re.IGNORECASE)
+        try:
+            for dir in self.dirs:
+                for entry in os.scandir(os.path.join(self.monitor_path, dir)):
+                    if entry.is_dir():
+                        name = entry.name
+                        match = folder_regex.match(name)
+                        if match:
+                            self.thumbnail_updated.emit(dir, name, "new")
+        except:
+            pass
+
+
+        # 监控文件夹内图片文件变化
         while not self._stop:
             # 判断监控文件夹是否有新型号
             current_dirs = []
-            for entry in os.scandir(self.monitor_path):
-                if entry.is_dir():
-                    current_dirs.append(entry.name)
-            current_dirs.sort()
-            if current_dirs != self.dirs:
-                self.dirs = current_dirs
-                self.dir_updated.emit(current_dirs)
+            try:
+                for entry in os.scandir(self.monitor_path):
+                    if entry.is_dir():
+                        current_dirs.append(entry.name)
+                current_dirs.sort()
+                if current_dirs != self.dirs:
+                    self.dirs = current_dirs
+                    self.dir_updated.emit(current_dirs)
+            except Exception as e:
+                pass
 
             # 删除不存在的图片文件夹数据
-            with self.lock:
-                to_be_deleted = []
+            to_be_deleted = []
+            try:
                 for dir,name in self.images.keys():
                     if self._stop: return
                     if not os.path.isdir(os.path.join(self.monitor_path, dir, name)):
@@ -61,45 +74,56 @@ class MonitorDir(QObject):
                 for dir, name in to_be_deleted:
                     del self.images[(dir, name)]
                     self.thumbnail_updated.emit(dir, name, "delete")
+            except Exception as e:
+                pass
                     
             # 创建图片文件
-            for dir in self.dirs:
-                for entry in os.scandir(os.path.join(self.monitor_path, dir)):
-                    if self._stop: return
-                    if entry.is_dir():
-                        name = entry.name
-                        match = folder_regex.match(name)
-                        if match:
-                            mtime = entry.stat().st_mtime
-                            if ((dir, name) not in self.images) or ((dir, name) in self.images and mtime>self.images[(dir,name)]):
-                                info = self.get_images(entry.path)
-                                self.images[(dir, name)] = mtime
-                                if info is None:
-                                    self.thumbnail_updated.emit(dir, name, "error")
-                                else:
-                                    try:
-                                        if not info['Cali']:
-                                            self.error_occurred.emit(f"{dir}/{name} 测量数据未做标定！")
-                                        if len(info["H_C"])>0 and len(info["H_S"])>0:
-                                            if not os.path.isdir(os.path.join(self.thumbnail_path, dir)):
-                                                os.mkdir(os.path.join(self.thumbnail_path, dir))
-                                            if self._stop: return
-                                            cs_image = self.merge_images(info["H_C"])
-                                            cs_image.save(os.path.join(self.thumbnail_path, dir, name+"_CS.png"),"PNG")
-                                            if self._stop: return
-                                            ss_image = self.merge_images(info["H_S"])
-                                            ss_image.save(os.path.join(self.thumbnail_path, dir, name+"_SS.png"),"PNG")
-                                            self.thumbnail_updated.emit(dir, name, "ok")
-                                        else:
-                                            self.thumbnail_updated.emit(dir, name, "error")
-                                    except Exception as e:
+            created_images_count = 0
+            try:
+                for dir in self.dirs:
+                    if created_images_count>=3: break        # 一次最多处理3个图片文件夹
+                    for entry in list(os.scandir(os.path.join(self.monitor_path, dir))):
+                        if self._stop: return
+                        if entry.is_dir():
+                            name = entry.name
+                            match = folder_regex.match(name)
+                            if match:
+                                mtime = entry.stat().st_mtime
+                                if ((dir, name) not in self.images) or ((dir, name) in self.images and mtime>self.images[(dir,name)]):
+                                    info = self.get_images(entry.path)
+                                    self.images[(dir, name)] = mtime
+                                    if info is None:
                                         self.thumbnail_updated.emit(dir, name, "error")
-                                        self.error_occurred.emit(f"{dir}/{name} 创建缩略图时出错：{e}")
+                                    else:
+                                        try:
+                                            if not info['Cali']:
+                                                self.error_occurred.emit(f"{dir}/{name} 测量数据未做标定！")
+                                            if len(info["H_C"])>0 and len(info["H_S"])>0:
+                                                if not os.path.isdir(os.path.join(self.thumbnail_path, dir)):
+                                                    os.mkdir(os.path.join(self.thumbnail_path, dir))
+                                                if self._stop: return
+                                                cs_image = self.merge_images(info["H_C"])
+                                                cs_image.save(os.path.join(self.thumbnail_path, dir, name+"_CS.png"),"PNG")
+                                                if self._stop: return
+                                                ss_image = self.merge_images(info["H_S"])
+                                                ss_image.save(os.path.join(self.thumbnail_path, dir, name+"_SS.png"),"PNG")
+                                                self.thumbnail_updated.emit(dir, name, "ok")
+                                                created_images_count += 1
+                                                break
+                                            else:
+                                                self.thumbnail_updated.emit(dir, name, "error")
+                                        except Exception as e:
+                                            self.thumbnail_updated.emit(dir, name, "error")
+                                            self.error_occurred.emit(f"{dir}/{name} 创建缩略图时出错：{e}")
+            except Exception as e:
+                pass
 
             if self.interval == 0: return
-            for i in range(self.interval):
-                if self._stop: return
-                time.sleep(1)
+            if created_images_count==0:
+                # 没有创建图片时才休眠
+                for i in range(self.interval):
+                    if self._stop: return
+                    time.sleep(1)
 
     @Slot()
     def stop(self):

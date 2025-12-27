@@ -1,15 +1,14 @@
 #!/usr/local/bin/python3
 # -*- coding: utf-8 -*-
 
-from PySide6.QtWidgets import QApplication, QMainWindow, QMessageBox, QFileDialog, QHeaderView, QStyleFactory
-from PySide6.QtCore import Qt, QAbstractTableModel, QModelIndex, QThread, Signal, Slot
+from PySide6.QtWidgets import QApplication, QMainWindow, QMessageBox, QHeaderView, QStyleFactory
+from PySide6.QtCore import Qt, QAbstractTableModel, QModelIndex, QThread, Signal, Slot, QMutex, QMutexLocker
 from PySide6.QtGui import QPixmap
 
 from ui.MainWindow_ui import Ui_MainWindow
 import resources_rc
 
 from library import MonitorDir
-from threading import Lock
 import shutil
 import json
 import os
@@ -54,7 +53,7 @@ class MainWindow(QMainWindow):
         self.ui = Ui_MainWindow()
         self.ui.setupUi(self)
         self.load_config()
-        self.lock = Lock()
+        self.mutex = QMutex()
         self.dirs = []      # 监控目录中的所有型号文件夹清单
         self.images = {}    # 保存的图片信息数据，{(dir,name)} = {"status": status, "checked": checked}
         self.data = []      # 当前型号的图片清单 [(dir,name)]
@@ -125,11 +124,11 @@ class MainWindow(QMainWindow):
 
 
     def move_todo(self):
-        self.lock.acquire()
+        self.mutex.lock()
         for dir,name in self.data:
             checked=self.images[(dir,name)]["checked"]
             if checked==self.status['error'] or checked=="":
-                self.lock.release()
+                self.mutex.unlock()
                 QMessageBox.warning(self, "错误", "有未确认的板厚图片，请先标记所有待处理的板厚图片！")
                 return
         
@@ -139,7 +138,7 @@ class MainWindow(QMainWindow):
                 try:
                     shutil.rmtree(os.path.join(self.config["ImagesFolder"], dir, name))
                 except Exception as e:
-                    self.lock.release()
+                    self.mutex.unlock()
                     QMessageBox.critical(self, "错误", f"无法删除指定的文件夹:\n{e}")
                     return
             elif checked==self.status['section']:
@@ -149,7 +148,7 @@ class MainWindow(QMainWindow):
                         with open(os.path.join(self.config["SectionFolder"], dir, name+".txt"), "w") as f:
                             f.write("")
                 except Exception as e:
-                    self.lock.release()
+                    self.mutex.unlock()
                     QMessageBox.critical(self, "错误", f"无法输出切片板信息至指定路径:\n{e}")
                     return
                 
@@ -157,38 +156,78 @@ class MainWindow(QMainWindow):
             dir = self.ui.cmbSelectPN.currentText()
             shutil.move(os.path.join(self.config["ImagesFolder"], dir), os.path.join(self.config["ProcessFolder"], dir))
         except Exception as e:
-            self.lock.release()
+            self.mutex.unlock()
             QMessageBox.critical(self, "错误", f"无法移动当前型号数据至待处理文件夹:\n{e}")
             return
-        self.lock.release()
+        self.mutex.unlock()
         QMessageBox.information(self, "成功", f"已将 {dir} 数据移发送至板厚分析待处理！")
     
 
 
 
     def mark_ok(self):
+        self.mutex.lock()
         idx = self.currentIndex
-        if idx>=0 and idx<len(self.data):
+        if idx<0 and idx>=len(self.data):
+            self.mutex.unlock()
+            QMessageBox.warning(self, "错误", "请选择待处理的图片！")
+            return
+        try:
             dir,name = self.data[idx]
+            if self.images[(dir,name)]["status"]!=self.status['ok']:
+                self.mutex.unlock()
+                QMessageBox.warning(self, "错误", "请等待当前图片缩略图生成完成！")
+                return
             self.images[(dir,name)]["checked"] = self.status['ok']
-            self.update_table()
-            self.select_next_unchecked_image()
+        except Exception as e:
+            self.mutex.unlock()
+            QMessageBox.critical(self, "错误", f"无法确认当前图片:\n{e}")
+            return
+        self.mutex.unlock()
+        self.update_table()
+        self.select_next_unchecked_image()
 
     def mark_section(self):
+        self.mutex.lock()
         idx = self.currentIndex
-        if idx>=0 and idx<len(self.data):
+        if idx<0 and idx>=len(self.data):
+            self.mutex.unlock()
+            QMessageBox.warning(self, "错误", "请选择待处理的图片！")
+            return
+        try:
             dir,name = self.data[idx]
+            if self.images[(dir,name)]["status"]!=self.status['ok']:
+                self.mutex.unlock()
+                QMessageBox.warning(self, "错误", "请等待当前图片缩略图生成完成！")
+                return
             self.images[(dir,name)]["checked"] = self.status['section']
-            self.update_table()
-            self.select_next_unchecked_image()
+        except Exception as e:
+            self.mutex.unlock()
+            QMessageBox.critical(self, "错误", f"无法确认当前图片:\n{e}")
+        self.mutex.unlock()
+        self.update_table()
+        self.select_next_unchecked_image()
 
     def mark_delete(self):
+        self.mutex.lock()
         idx = self.currentIndex
-        if idx>=0 and idx<len(self.data):
+        if idx<0 and idx>=len(self.data):
+            self.mutex.unlock()
+            QMessageBox.warning(self, "错误", "请选择待处理的图片！")
+            return
+        try:
             dir,name = self.data[idx]
+            if self.images[(dir,name)]["status"]!=self.status['ok']:
+                self.mutex.unlock()
+                QMessageBox.warning(self, "错误", "请等待当前图片缩略图生成完成！")
+                return
             self.images[(dir,name)]["checked"] = self.status['delete']
-            self.update_table()
-            self.select_next_unchecked_image()
+        except Exception as e:
+            self.mutex.unlock()
+            QMessageBox.critical(self, "错误", f"无法确认当前图片:\n{e}")
+        self.mutex.unlock()
+        self.update_table()
+        self.select_next_unchecked_image()
 
     @Slot()
     def selected_pn_changed(self):
@@ -200,22 +239,25 @@ class MainWindow(QMainWindow):
         # 根据当前选择的型号更新表格数据
         folder_regex = re.compile(r"^([A-Z0-9\-]+)_(\d+)_(\d{14})_(\d*)_.*$",re.IGNORECASE)
         select_dir = self.ui.cmbSelectPN.currentText()
-        with self.lock:
-            self.data = [(dir,name) for dir,name in self.images.keys() if dir == select_dir]
-            self.data.sort(key=lambda x: x[1])
-            tableData=[]
-            for i,info in enumerate(self.data):
-                dir,name = info
-                match = folder_regex.match(name)
-                if match:
-                    matrix = match.group(4)
-                else:
-                    matrix = ""
-                image = self.images[(dir,name)]
-                tableData.append([matrix,image["status"],image['checked']])
-        
-        self.tableModel=ImagesTableModel(tableData,self.TableHeaders)
-        self.ui.tblImages.setModel(self.tableModel)
+        with QMutexLocker(self.mutex):
+            try:
+                self.data = [(dir,name) for dir,name in self.images.keys() if dir == select_dir]
+                self.data.sort(key=lambda x: x[1])
+                tableData=[]
+                for i,info in enumerate(self.data):
+                    dir,name = info
+                    match = folder_regex.match(name)
+                    if match:
+                        matrix = match.group(4)
+                    else:
+                        matrix = ""
+                    image = self.images[(dir,name)]
+                    tableData.append([matrix,image["status"],image['checked']])
+            
+                self.tableModel=ImagesTableModel(tableData,self.TableHeaders)
+                self.ui.tblImages.setModel(self.tableModel)
+            except Exception as e:
+                QMessageBox.critical(self, "错误", f"无法更新当前图片列表数据:\n{e}")
 
     @Slot()
     def click_table_row(self):
@@ -225,33 +267,38 @@ class MainWindow(QMainWindow):
 
     def get_current_image(self):
         # 获取当前选中的图片信息
-        with self.lock:
-            idx = self.currentIndex
-            if idx>=0 and idx<len(self.data):
-                dir,name = self.data[idx]
-            else:
-                dir=""
-                name=""
+        dir=""
+        name=""
+        with QMutexLocker(self.mutex):
+            try:
+                idx = self.currentIndex
+                if idx>=0 and idx<len(self.data):
+                    dir,name = self.data[idx]
+            except Exception as e:
+                pass
         return dir,name
 
     def select_table_row(self,dir,name):
         if not dir: return
-        with self.lock:
-            if (dir,name) in self.data:
-                idx = self.data.index((dir,name))
-                target_index = self.tableModel.index(idx,0)
-                self.ui.tblImages.setCurrentIndex(target_index)
-                self.ui.tblImages.selectRow(idx)
-            else:
-                idx = -1
-                self.ui.tblImages.clearFocusr()
-                self.ui.tblImages.clearSelection()
-            self.currentIndex = idx
+        with QMutexLocker(self.mutex):
+            try:
+                if (dir,name) in self.data:
+                    idx = self.data.index((dir,name))
+                    target_index = self.tableModel.index(idx,0)
+                    self.ui.tblImages.setCurrentIndex(target_index)
+                    self.ui.tblImages.selectRow(idx)
+                else:
+                    idx = -1
+                    self.ui.tblImages.clearFocusr()
+                    self.ui.tblImages.clearSelection()
+                self.currentIndex = idx
+            except Exception as e:
+                pass
         self.show_selected_image()
 
     def select_next_unchecked_image(self):
         dir,name = self.get_current_image()
-        with self.lock:
+        with QMutexLocker(self.mutex):
             idx=self.currentIndex
             length = len(self.data)
             unchecked = False
@@ -277,68 +324,77 @@ class MainWindow(QMainWindow):
         self.ui.imgSS.setPixmap(QPixmap())
 
     def show_selected_image(self):
-        self.lock.acquire()
+        self.mutex.lock()
         idx = self.currentIndex
         length = len(self.data)
-
         if idx<0 or idx>length-1:
             self.clear_current_image()
-            self.lock.release()
+            self.mutex.unlock()
             return
         else:
-            dir,name = self.data[idx]
-            info=self.images[(dir,name)]
-            status = info["status"]
-            checked = info["checked"]
-            self.lock.release()
-            self.ui.lblTitle.setText("{} {}".format(checked,name))
-            self.ui.lblComment.setText("{} / {}".format(idx+1,length))
-            if status == self.status["ok"]:
-                self.ui.imgCS.setPixmap(QPixmap(os.path.join(self.config["ThumbnailFolder"], dir, name+"_CS.png")))
-                self.ui.imgSS.setPixmap(QPixmap(os.path.join(self.config["ThumbnailFolder"], dir, name+"_SS.png")))
-            else:
-                self.ui.imgCS.setPixmap(QPixmap())
-                self.ui.imgSS.setPixmap(QPixmap())
+            try:
+                dir,name = self.data[idx]
+                info=self.images[(dir,name)]
+                status = info["status"]
+                checked = info["checked"]
+            finally:
+                self.mutex.unlock()
+            try:
+                self.ui.lblTitle.setText("{} {}".format(checked,name))
+                self.ui.lblComment.setText("{} / {}".format(idx+1,length))
+                if status == self.status["ok"]:
+                    self.ui.imgCS.setPixmap(QPixmap(os.path.join(self.config["ThumbnailFolder"], dir, name+"_CS.png")))
+                    self.ui.imgSS.setPixmap(QPixmap(os.path.join(self.config["ThumbnailFolder"], dir, name+"_SS.png")))
+                else:
+                    self.ui.imgCS.setPixmap(QPixmap())
+                    self.ui.imgSS.setPixmap(QPixmap())
+            except Exception as e:
+                QMessageBox.critical(self, "错误", f"无法载入缩略图：{e}")
 
 
     @Slot(list)
     def dir_updated(self, dirs: list):
         self.ui.cmbSelectPN.currentIndexChanged.disconnect(self.selected_pn_changed)
-        with self.lock:
-            current_dir = self.ui.cmbSelectPN.currentText()
-            self.ui.cmbSelectPN.clear()
-            dir_changed=True
-            for dir in dirs:
-                self.ui.cmbSelectPN.addItem(dir)
-                if current_dir == dir:
-                    dir_changed=False
-                    self.ui.cmbSelectPN.setCurrentText(dir)
+        dir_changed = True
+        with QMutexLocker(self.mutex):
+            try:
+                current_dir = self.ui.cmbSelectPN.currentText()
+                self.ui.cmbSelectPN.clear()
+                for dir in dirs:
+                    self.ui.cmbSelectPN.addItem(dir)
+                    if current_dir == dir:
+                        dir_changed=False
+                        self.ui.cmbSelectPN.setCurrentText(dir)
+            except Exception as e:
+                QMessageBox.critical(self, "错误", f"无法更新型号列表：{e}")
 
         self.ui.cmbSelectPN.currentIndexChanged.connect(self.selected_pn_changed)
         if dir_changed:
             self.selected_pn_changed()
 
-
-
     @Slot(str, str)
     def thumbnail_updated(self, dir:str, name:str, status:str):
         # 更新收集的图片信息
-        with self.lock:
-            if status == "ok":
-                if (dir,name) in self.images:
-                    self.images[(dir,name)]["status"] = self.status[status]
-                else:
-                    self.images[(dir,name)] = {"status": self.status[status], "checked": ""}
-            elif status == "error":
-                if (dir,name) in self.images:
-                    self.images[(dir,name)]["status"] = self.status[status]
-                else:
-                    self.images[(dir,name)] = {"status": self.status[status], "checked": ""}
-            elif status == "delete":
-                if (dir,name) in self.images:
-                    del self.images[(dir,name)]
-            elif status == "new":
-                self.images[(dir,name)] = {"status": "", "checked": ""}
+        with QMutexLocker(self.mutex):
+            current_dir = self.ui.cmbSelectPN.currentText()
+            try:
+                if status == "ok":
+                    if (dir,name) in self.images:
+                        self.images[(dir,name)]["status"] = self.status[status]
+                    else:
+                        self.images[(dir,name)] = {"status": self.status[status], "checked": ""}
+                elif status == "error":
+                    if (dir,name) in self.images:
+                        self.images[(dir,name)]["status"] = self.status[status]
+                    else:
+                        self.images[(dir,name)] = {"status": self.status[status], "checked": ""}
+                elif status == "delete":
+                    if (dir,name) in self.images:
+                        del self.images[(dir,name)]
+                elif status == "new":
+                    self.images[(dir,name)] = {"status": "", "checked": ""}
+            except Exception as e:
+                QMessageBox.critical(self, "错误", f"无法更新图片信息：{e}")
 
         # 如果更新的数据为当前选择的型号，则更新表格
         if self.ui.cmbSelectPN.currentText() == dir:
