@@ -354,8 +354,18 @@ class MainWindow(QMainWindow):
                 self.ui.lblTitle.setText("{} {}".format(checked,name))
                 self.ui.lblComment.setText("{} / {}".format(idx+1,length))
                 if status == self.status["ok"]:
-                    self.ui.imgCS.setPixmap(QPixmap(os.path.join(self.config["ThumbnailFolder"], dir, name+"_CS.png")))
-                    self.ui.imgSS.setPixmap(QPixmap(os.path.join(self.config["ThumbnailFolder"], dir, name+"_SS.png")))
+                    imgCS = QPixmap(os.path.join(self.config["ThumbnailFolder"], dir, name+"_CS.png")).scaled(
+                        self.ui.imgCS.size(), 
+                        Qt.KeepAspectRatio,  # 保持宽高比
+                        Qt.SmoothTransformation  # 平滑缩放
+                    )
+                    imgSS = QPixmap(os.path.join(self.config["ThumbnailFolder"], dir, name+"_CS.png")).scaled(
+                        self.ui.imgSS.size(), 
+                        Qt.KeepAspectRatio,  # 保持宽高比
+                        Qt.SmoothTransformation  # 平滑缩放
+                    )
+                    self.ui.imgCS.setPixmap(imgCS)
+                    self.ui.imgSS.setPixmap(imgSS)
                 else:
                     self.ui.imgCS.setPixmap(QPixmap())
                     self.ui.imgSS.setPixmap(QPixmap())

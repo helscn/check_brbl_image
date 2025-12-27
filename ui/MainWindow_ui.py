@@ -123,6 +123,7 @@ class Ui_MainWindow(object):
         self.imgCS.setObjectName(u"imgCS")
         self.imgCS.setMinimumSize(QSize(300, 300))
         self.imgCS.setFrameShape(QFrame.Box)
+        self.imgCS.setAlignment(Qt.AlignCenter)
 
         self.gridLayout.addWidget(self.imgCS, 3, 0, 1, 1)
 
@@ -130,6 +131,7 @@ class Ui_MainWindow(object):
         self.imgSS.setObjectName(u"imgSS")
         self.imgSS.setMinimumSize(QSize(300, 300))
         self.imgSS.setFrameShape(QFrame.Box)
+        self.imgSS.setAlignment(Qt.AlignCenter)
 
         self.gridLayout.addWidget(self.imgSS, 3, 1, 1, 1)
 
