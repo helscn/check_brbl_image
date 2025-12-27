@@ -11,8 +11,9 @@ import resources_rc
 from library import MonitorDir
 import shutil
 import json
-import os
 import re
+import sys
+import os
 
 
 
@@ -72,20 +73,30 @@ class MainWindow(QMainWindow):
 
 
     def load_config(self):
-        config={
-            "ImagesFolder":"E:/PCBImages",
-            "ThumbnailFolder":"E:/PCBThumbnails",
-            "SectionFolder":"E:/PCBSections",
-            "ProcessFolder":"E:/PCBThickness"
+        self.config={
+            "ImagesFolder":"D:\\PCBImages",
+            "ThumbnailFolder":"Z:\\PCBImages",
+            "SectionFolder":"Z:\\PCBSections",
+            "ProcessFolder":"D:\\PCBThickness"
         }
         if os.path.isfile("config.json"):
             try:
                 with open("config.json", "r") as f:
-                    self.config = self.config.update(json.load(f))
+                    self.config.update(json.load(f))
             except Exception as e:
                 QMessageBox.critical(self, "配置文件错误", f"无法读取配置文件:\n{e}")
-        self.config = config
+        else:
+            try:
+                with open("config.json", "w") as f:
+                    json.dump(self.config, f, indent=4)
+            except Exception as e:
+                QMessageBox.critical(self, "配置文件错误", f"无法创建配置文件:\n{e}")
 
+        for key,value in self.config.items():
+            if key.endswith("Folder"):
+                if not os.path.isdir(value):
+                    QMessageBox.critical(self, "配置文件错误", f"设置项 {key} 指定的目录不存在:\n{value}")
+                    sys.exit(1)
     def init_table(self):
         self.TableHeaders=['二维码',' 板厚图片 ',' 确认结果 ']
         self.tableModel=ImagesTableModel([],self.TableHeaders)
