@@ -359,7 +359,7 @@ class MainWindow(QMainWindow):
                         Qt.KeepAspectRatio,  # 保持宽高比
                         Qt.SmoothTransformation  # 平滑缩放
                     )
-                    imgSS = QPixmap(os.path.join(self.config["ThumbnailFolder"], dir, name+"_CS.png")).scaled(
+                    imgSS = QPixmap(os.path.join(self.config["ThumbnailFolder"], dir, name+"_SS.png")).scaled(
                         self.ui.imgSS.size(), 
                         Qt.KeepAspectRatio,  # 保持宽高比
                         Qt.SmoothTransformation  # 平滑缩放
