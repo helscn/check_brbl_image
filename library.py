@@ -143,6 +143,11 @@ class MonitorDir(QObject):
 
         if os.path.isdir(os.path.join(folder_path, "Cali")):
             images["Cali"]=True
+        else:
+            # 不存在Cali标定文件夹则等待3秒再判断
+            time.sleep(3)
+            if os.path.isdir(os.path.join(folder_path, "Cali")):
+                images["Cali"]=True
         if os.path.isdir(os.path.join(folder_path, "H")):
             i=1
             AH=os.path.join(folder_path, "H","C1",f"AH{i}.tif")
