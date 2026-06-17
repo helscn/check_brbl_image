@@ -179,7 +179,7 @@ class MainWindow(QMainWindow):
     def mark_ok(self):
         self.mutex.lock()
         idx = self.currentIndex
-        if idx<0 and idx>=len(self.data):
+        if idx<0 or idx>=len(self.data):
             self.mutex.unlock()
             QMessageBox.warning(self, "错误", "请选择待处理的图片！")
             return

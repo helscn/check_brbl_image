@@ -210,6 +210,7 @@ class MonitorDir(QObject):
                     if count/crop_width > crop_threshold:
                         break
                     odd_top_crop += 1
+                    count = 0
             elif idx == 1:
                 crop_width = img.width() - overlay_crop * 2
                 count=0
@@ -222,6 +223,7 @@ class MonitorDir(QObject):
                     if count/crop_width > crop_threshold:
                         break
                     even_top_crop += 1
+                    count = 0
 
             crop_width = img.width() - overlay_crop * 2
             crop_heigth = img.height() - odd_top_crop
