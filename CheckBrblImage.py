@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 from PySide6.QtWidgets import QApplication, QMainWindow, QMessageBox, QHeaderView, QStyleFactory
-from PySide6.QtCore import Qt, QAbstractTableModel, QModelIndex, QThread, Signal, Slot, QMutex, QMutexLocker
+from PySide6.QtCore import Qt, QAbstractTableModel, QModelIndex, QObject, QThread, Signal, Slot, QMutex, QMutexLocker
 from PySide6.QtGui import QPixmap
 
 from ui.MainWindow_ui import Ui_MainWindow
@@ -14,6 +14,7 @@ import json
 import re
 import sys
 import os
+import time
 
 
 
@@ -46,6 +47,91 @@ class ImagesTableModel(QAbstractTableModel):
             else:  # 垂直表头，显示行号
                 return str(section + 1)
         return None
+
+
+class MoveWorker(QObject):
+    """在后台线程逐个子文件夹执行 I/O，不阻塞主界面。
+    遇到被锁的文件跳过该子文件夹，汇总报告，让用户下次重试。"""
+    finished = Signal(str, list, list)  # dir_name, succeeded_names, failed_info[(name, err), ...]
+
+    def __init__(self, config, dir_name, subfolder_actions, parent=None):
+        """
+        config            : 配置字典
+        dir_name          : 当前型号目录名
+        subfolder_actions : [(name, action), ...]
+            action: "ok" / "section" / "delete"
+        """
+        super().__init__(parent)
+        self.config = config
+        self.dir_name = dir_name
+        self.subfolder_actions = subfolder_actions
+
+    @Slot()
+    def run(self):
+        succeeded = []
+        failed = []
+
+        for name, action in self.subfolder_actions:
+            if action == "delete":
+                path = os.path.join(self.config["ImagesFolder"], self.dir_name, name)
+                try:
+                    self._robust_rmtree(path)
+                    succeeded.append(name)
+                except Exception as e:
+                    failed.append((name, f"删除失败（文件可能被其他程序占用）:\n{e}"))
+
+            elif action == "section":
+                # 先创建切片标记
+                section_dir = os.path.join(self.config["SectionFolder"], self.dir_name)
+                txt_path = os.path.join(section_dir, name + ".txt")
+                try:
+                    os.makedirs(section_dir, exist_ok=True)
+                    if not os.path.isfile(txt_path):
+                        with open(txt_path, "w") as f:
+                            f.write("")
+                except Exception as e:
+                    failed.append((name, f"创建切片标记失败:\n{e}"))
+                    continue
+
+                # 再移动子文件夹
+                src = os.path.join(self.config["ImagesFolder"], self.dir_name, name)
+                dst = os.path.join(self.config["ProcessFolder"], self.dir_name, name)
+                try:
+                    os.makedirs(os.path.join(self.config["ProcessFolder"], self.dir_name), exist_ok=True)
+                    shutil.move(src, dst)
+                    succeeded.append(name)
+                except Exception as e:
+                    failed.append((name, f"移动失败（文件可能被其他程序占用）:\n{e}"))
+
+            else:  # "ok"
+                src = os.path.join(self.config["ImagesFolder"], self.dir_name, name)
+                dst = os.path.join(self.config["ProcessFolder"], self.dir_name, name)
+                try:
+                    os.makedirs(os.path.join(self.config["ProcessFolder"], self.dir_name), exist_ok=True)
+                    shutil.move(src, dst)
+                    succeeded.append(name)
+                except Exception as e:
+                    failed.append((name, f"移动失败（文件可能被其他程序占用）:\n{e}"))
+
+        # 全部尝试完毕，通知主线程
+        self.finished.emit(self.dir_name, succeeded, failed)
+
+    def _robust_rmtree(self, path, max_retries=3, retry_delay=1.0):
+        """遇到 PermissionError 时短暂等待重试（应对 Windows 文件锁短暂释放）"""
+        for attempt in range(max_retries):
+            try:
+                shutil.rmtree(path)
+                return
+            except PermissionError:
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+                else:
+                    raise
+            except OSError:
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+                else:
+                    raise
 
 
 class MainWindow(QMainWindow):
@@ -131,49 +217,103 @@ class MainWindow(QMainWindow):
         if not self.thread.wait(3000):  # 等待3秒
             self.thread.terminate()  # 最后手段
             self.thread.wait()
+        # 如果后台移动线程仍在运行，也安全终止
+        if hasattr(self, 'move_thread') and self.move_thread is not None:
+            if self.move_thread.isRunning():
+                self.move_thread.quit()
+                if not self.move_thread.wait(2000):
+                    self.move_thread.terminate()
+                    self.move_thread.wait()
         event.accept()
 
 
     def move_todo(self):
-        self.mutex.lock()
-        for dir,name in self.data:
-            checked=self.images[(dir,name)]["checked"]
-            if checked==self.status['error'] or checked=="":
-                self.mutex.unlock()
+        """将当前型号已标记的子文件夹逐个发送至待处理文件夹（后台 I/O，不阻塞 UI）"""
+        # ── 快速验证（主线程，毫秒级） ──
+        for dir, name in self.data:
+            checked = self.images[(dir, name)]["checked"]
+            if checked == self.status['error'] or checked == "":
                 QMessageBox.warning(self, "错误", "有未确认的板厚图片，请先标记所有待处理的板厚图片！")
                 return
-        
-        for dir,name in self.data:
-            checked=self.images[(dir,name)]["checked"]
-            if checked==self.status['delete']:
-                try:
-                    shutil.rmtree(os.path.join(self.config["ImagesFolder"], dir, name))
-                except Exception as e:
-                    self.mutex.unlock()
-                    QMessageBox.critical(self, "错误", f"无法删除指定的文件夹:\n{e}")
-                    return
-            elif checked==self.status['section']:
-                try:
-                    if not os.path.isdir(os.path.join(self.config["SectionFolder"], dir)):
-                        os.mkdir(os.path.join(self.config["SectionFolder"], dir))
-                        with open(os.path.join(self.config["SectionFolder"], dir, name+".txt"), "w") as f:
-                            f.write("")
-                except Exception as e:
-                    self.mutex.unlock()
-                    QMessageBox.critical(self, "错误", f"无法输出切片板信息至指定路径:\n{e}")
-                    return
-                
-        try:
-            dir = self.ui.cmbSelectPN.currentText()
-            shutil.move(os.path.join(self.config["ImagesFolder"], dir), os.path.join(self.config["ProcessFolder"], dir))
-        except Exception as e:
-            self.mutex.unlock()
-            QMessageBox.critical(self, "错误", f"无法移动当前型号数据至待处理文件夹:\n{e}")
-            return
-        self.mutex.unlock()
-        QMessageBox.information(self, "成功", f"已将 {dir} 数据移发送至板厚分析待处理！")
-    
 
+        # ── 收集待处理的子文件夹清单 ──
+        dir = self.ui.cmbSelectPN.currentText()
+        subfolder_actions = []
+        for d, name in self.data:
+            checked = self.images[(d, name)]["checked"]
+            if checked == self.status['delete']:
+                subfolder_actions.append((name, "delete"))
+            elif checked == self.status['section']:
+                subfolder_actions.append((name, "section"))
+            else:
+                subfolder_actions.append((name, "ok"))
+
+        if not subfolder_actions:
+            return
+
+        # ── 锁住界面按钮，启动后台线程 ──
+        self.ui.btnMoveTodo.setEnabled(False)
+        self.ui.btnMoveTodo.setText("正在处理…")
+        self.ui.btnMarkOK.setEnabled(False)
+        self.ui.btnMarkSection.setEnabled(False)
+        self.ui.btnMarkDelete.setEnabled(False)
+
+        self._moving_dir = dir
+        self.move_thread = QThread(self)
+        self.move_worker = MoveWorker(self.config, dir, subfolder_actions)
+        self.move_worker.moveToThread(self.move_thread)
+        self.move_worker.finished.connect(self._move_finished)
+        self.move_thread.started.connect(self.move_worker.run)
+        self.move_thread.finished.connect(self.move_thread.deleteLater)
+        self.move_thread.start()
+
+    def _move_finished(self, dir_name, succeeded, failed):
+        """后台处理完毕━━更新界面并显示汇总"""
+        # 从 self.images 中移除已处理的子文件夹
+        for name in succeeded:
+            key = (dir_name, name)
+            if key in self.images:
+                del self.images[key]
+
+        # 更新当前数据（只保留失败项）
+        failed_names = {f[0] for f in failed}
+        self.data = [(d, n) for d, n in self.data if n in failed_names]
+        self.currentIndex = -1
+        self.update_table()
+        self.clear_current_image()
+
+        # 如果全部成功，删除空的型号目录
+        if not failed:
+            pn_path = os.path.join(self.config["ImagesFolder"], dir_name)
+            try:
+                if os.path.isdir(pn_path) and not os.listdir(pn_path):
+                    os.rmdir(pn_path)
+            except Exception:
+                pass  # 删不掉也无所谓
+
+        # 恢复按钮
+        self.ui.btnMoveTodo.setEnabled(True)
+        self.ui.btnMoveTodo.setText("发送到板厚分析")
+        self.ui.btnMarkOK.setEnabled(True)
+        self.ui.btnMarkSection.setEnabled(True)
+        self.ui.btnMarkDelete.setEnabled(True)
+
+        self.move_thread = None
+        self.move_worker = None
+
+        # 汇总弹窗
+        total = len(succeeded) + len(failed)
+        if not failed:
+            QMessageBox.information(self, "完成",
+                f"{dir_name}\n\n已成功处理全部 {total} 个子文件夹，数据已发送至待处理文件夹。")
+        else:
+            failed_lines = "\n".join([f"  ⚠ {name}: {err.splitlines()[0]}" for name, err in failed])
+            QMessageBox.warning(self, "部分完成",
+                f"{dir_name}\n\n"
+                f"✅ 成功处理 {len(succeeded)} / {total} 个子文件夹\n"
+                f"❌ {len(failed)} 个文件夹处理失败：\n\n{failed_lines}\n\n"
+                f"请关闭占用该文件夹的程序（拍照软件、资源管理器等），\n"
+                f"然后重新点击「发送到板厚分析」重试。")
 
 
     def mark_ok(self):
