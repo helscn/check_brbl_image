@@ -165,17 +165,6 @@ class Ui_MainWindow(object):
 
         self.horizontalLayout_3.addWidget(self.btnMarkOK)
 
-        self.horizontalSpacer = QSpacerItem(40, 20, QSizePolicy.Expanding, QSizePolicy.Minimum)
-
-        self.horizontalLayout_3.addItem(self.horizontalSpacer)
-
-        self.btnMarkSection = QPushButton(self.centralwidget)
-        self.btnMarkSection.setObjectName(u"btnMarkSection")
-        self.btnMarkSection.setMinimumSize(QSize(150, 40))
-        self.btnMarkSection.setMaximumSize(QSize(150, 16777215))
-
-        self.horizontalLayout_3.addWidget(self.btnMarkSection)
-
         self.horizontalSpacer_4 = QSpacerItem(40, 20, QSizePolicy.Expanding, QSizePolicy.Minimum)
 
         self.horizontalLayout_3.addItem(self.horizontalSpacer_4)
@@ -223,7 +212,6 @@ class Ui_MainWindow(object):
         self.label_5.setText(QCoreApplication.translate("MainWindow", u"\u6b63\u9762", None))
         self.label_6.setText(QCoreApplication.translate("MainWindow", u"\u53cd\u9762", None))
         self.btnMarkOK.setText(QCoreApplication.translate("MainWindow", u"\u2705 \u6807\u8bb0\u4e3aOK\u677f", None))
-        self.btnMarkSection.setText(QCoreApplication.translate("MainWindow", u"\u2b55 \u6807\u8bb0\u4e3a\u5207\u7247\u677f", None))
         self.btnMarkDelete.setText(QCoreApplication.translate("MainWindow", u"\u274c \u5220\u9664\u5f53\u524d\u5f02\u5e38\u56fe\u7247", None))
     # retranslateUi
 

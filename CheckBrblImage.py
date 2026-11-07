@@ -206,7 +206,7 @@ class MainWindow(QMainWindow):
         self.ui.cmbSelectPN.currentIndexChanged.connect(self.selected_pn_changed)
         self.ui.btnMoveTodo.clicked.connect(self.move_todo)
         self.ui.btnMarkOK.clicked.connect(self.mark_ok)
-        self.ui.btnMarkSection.clicked.connect(self.mark_section)
+        # self.ui.btnMarkSection.clicked.connect(self.mark_section)
         self.ui.btnMarkDelete.clicked.connect(self.mark_delete)
         self.ui.tblImages.clicked.connect(self.click_table_row)
         
