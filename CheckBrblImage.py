@@ -59,7 +59,7 @@ class MoveWorker(QObject):
         config            : 配置字典
         dir_name          : 当前型号目录名
         subfolder_actions : [(name, action), ...]
-            action: "ok" / "section" / "delete"
+            action: "ok" / "delete"（"section" 为已废弃的切片板标记）
         """
         super().__init__(parent)
         self.config = config
@@ -81,19 +81,7 @@ class MoveWorker(QObject):
                     failed.append((name, f"删除失败（文件可能被其他程序占用）:\n{e}"))
 
             elif action == "section":
-                # 先创建切片标记
-                section_dir = os.path.join(self.config["SectionFolder"], self.dir_name)
-                txt_path = os.path.join(section_dir, name + ".txt")
-                try:
-                    os.makedirs(section_dir, exist_ok=True)
-                    if not os.path.isfile(txt_path):
-                        with open(txt_path, "w") as f:
-                            f.write("")
-                except Exception as e:
-                    failed.append((name, f"创建切片标记失败:\n{e}"))
-                    continue
-
-                # 再移动子文件夹
+                # 已废弃：切片板功能已删除，保留分支仅为兼容旧标记数据
                 src = os.path.join(self.config["ImagesFolder"], self.dir_name, name)
                 dst = os.path.join(self.config["ProcessFolder"], self.dir_name, name)
                 try:
@@ -162,7 +150,6 @@ class MainWindow(QMainWindow):
         self.config={
             "ImagesFolder":"D:\\PCBImages",
             "ThumbnailFolder":"Z:\\PCBImages",
-            "SectionFolder":"Z:\\PCBSections",
             "ProcessFolder":"D:\\PCBThickness"
         }
         if os.path.isfile("config.json"):
@@ -178,11 +165,13 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 QMessageBox.critical(self, "配置文件错误", f"无法创建配置文件:\n{e}")
 
-        for key,value in self.config.items():
-            if key.endswith("Folder"):
-                if not os.path.isdir(value):
-                    QMessageBox.critical(self, "配置文件错误", f"设置项 {key} 指定的目录不存在:\n{value}")
-                    sys.exit(1)
+        # 只校验程序实际使用的目录；配置文件中遗留的其它 *Folder 项不再参与检查
+        required_folders = ("ImagesFolder", "ThumbnailFolder", "ProcessFolder")
+        for key in required_folders:
+            value = self.config.get(key)
+            if not value or not os.path.isdir(value):
+                QMessageBox.critical(self, "配置文件错误", f"设置项 {key} 指定的目录不存在:\n{value}")
+                sys.exit(1)
     def init_table(self):
         self.TableHeaders=['二维码',' 板厚图片 ',' 确认结果 ']
         self.tableModel=ImagesTableModel([],self.TableHeaders)
@@ -206,7 +195,6 @@ class MainWindow(QMainWindow):
         self.ui.cmbSelectPN.currentIndexChanged.connect(self.selected_pn_changed)
         self.ui.btnMoveTodo.clicked.connect(self.move_todo)
         self.ui.btnMarkOK.clicked.connect(self.mark_ok)
-        # self.ui.btnMarkSection.clicked.connect(self.mark_section)
         self.ui.btnMarkDelete.clicked.connect(self.mark_delete)
         self.ui.tblImages.clicked.connect(self.click_table_row)
         
@@ -229,9 +217,14 @@ class MainWindow(QMainWindow):
 
     def move_todo(self):
         """将当前型号已标记的子文件夹逐个发送至待处理文件夹（后台 I/O，不阻塞 UI）"""
+        # 注意：监控线程会随时删除 self.images 中的条目，这里统一用 .get 取值，
+        # 避免 KeyError 让本函数提前退出、界面按钮被禁用后无法恢复。
         # ── 快速验证（主线程，毫秒级） ──
         for dir, name in self.data:
-            checked = self.images[(dir, name)]["checked"]
+            info = self.images.get((dir, name))
+            if info is None:
+                continue
+            checked = info.get("checked", "")
             if checked == self.status['error'] or checked == "":
                 QMessageBox.warning(self, "错误", "有未确认的板厚图片，请先标记所有待处理的板厚图片！")
                 return
@@ -240,7 +233,10 @@ class MainWindow(QMainWindow):
         dir = self.ui.cmbSelectPN.currentText()
         subfolder_actions = []
         for d, name in self.data:
-            checked = self.images[(d, name)]["checked"]
+            info = self.images.get((d, name))
+            if info is None:
+                continue
+            checked = info.get("checked", "")
             if checked == self.status['delete']:
                 subfolder_actions.append((name, "delete"))
             elif checked == self.status['section']:
@@ -255,7 +251,6 @@ class MainWindow(QMainWindow):
         self.ui.btnMoveTodo.setEnabled(False)
         self.ui.btnMoveTodo.setText("正在处理…")
         self.ui.btnMarkOK.setEnabled(False)
-        self.ui.btnMarkSection.setEnabled(False)
         self.ui.btnMarkDelete.setEnabled(False)
 
         self._moving_dir = dir
@@ -295,7 +290,6 @@ class MainWindow(QMainWindow):
         self.ui.btnMoveTodo.setEnabled(True)
         self.ui.btnMoveTodo.setText("发送到板厚分析")
         self.ui.btnMarkOK.setEnabled(True)
-        self.ui.btnMarkSection.setEnabled(True)
         self.ui.btnMarkDelete.setEnabled(True)
 
         self.move_thread = None
@@ -334,27 +328,6 @@ class MainWindow(QMainWindow):
             self.mutex.unlock()
             QMessageBox.critical(self, "错误", f"无法确认当前图片:\n{e}")
             return
-        self.mutex.unlock()
-        self.update_table()
-        self.select_next_unchecked_image()
-
-    def mark_section(self):
-        self.mutex.lock()
-        idx = self.currentIndex
-        if idx<0 and idx>=len(self.data):
-            self.mutex.unlock()
-            QMessageBox.warning(self, "错误", "请选择待处理的图片！")
-            return
-        try:
-            dir,name = self.data[idx]
-            if self.images[(dir,name)]["status"]!=self.status['ok']:
-                self.mutex.unlock()
-                QMessageBox.warning(self, "错误", "请等待当前图片缩略图生成完成！")
-                return
-            self.images[(dir,name)]["checked"] = self.status['section']
-        except Exception as e:
-            self.mutex.unlock()
-            QMessageBox.critical(self, "错误", f"无法确认当前图片:\n{e}")
         self.mutex.unlock()
         self.update_table()
         self.select_next_unchecked_image()
@@ -440,7 +413,7 @@ class MainWindow(QMainWindow):
                     self.ui.tblImages.selectRow(idx)
                 else:
                     idx = -1
-                    self.ui.tblImages.clearFocusr()
+                    self.ui.tblImages.clearFocus()
                     self.ui.tblImages.clearSelection()
                 self.currentIndex = idx
             except Exception as e:
@@ -573,7 +546,28 @@ class MainWindow(QMainWindow):
 
 
 
+def install_excepthook():
+    """打包为 --noconsole 后 stderr 不可见，槽函数里的未捕获异常会静默丢失。
+    这里把异常写入同目录 error.log，便于排查“点了按钮没反应”的问题。"""
+    import traceback
+    import datetime
+
+    def hook(exc_type, exc_value, exc_tb):
+        try:
+            text = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+            with open(os.path.join(os.path.dirname(os.path.abspath(sys.argv[0])), "error.log"),
+                      "a", encoding="utf-8") as f:
+                f.write(f"[{datetime.datetime.now():%Y-%m-%d %H:%M:%S}]\n{text}\n")
+        except Exception:
+            pass
+        if sys.stderr is not None:
+            sys.__excepthook__(exc_type, exc_value, exc_tb)
+
+    sys.excepthook = hook
+
+
 if __name__ == '__main__':
+    install_excepthook()
     app = QApplication([])
     app.setStyle(QStyleFactory.create("Fusion"))
     win = MainWindow()
